@@ -53,7 +53,6 @@ public class KubernetesServiceDiscovery extends CachingServiceDiscovery {
     private final boolean secure;
     private final Vertx vertx;
     private static final Logger LOGGER = LoggerFactory.getLogger(KubernetesServiceDiscovery.class);
-    private final KubernetesClient clientW;
     private AtomicBoolean invalidated = new AtomicBoolean();
 
     public KubernetesServiceDiscovery(String serviceName, KubernetesConfiguration config, Vertx vertx) {
@@ -69,14 +68,13 @@ public class KubernetesServiceDiscovery extends CachingServiceDiscovery {
         } else {
             Config k8sConfig = ((ConfigBuilder)((ConfigBuilder)(new ConfigBuilder(base)).withMasterUrl(masterUrl)).withNamespace(this.namespace)).build();
             this.client = (new KubernetesClientBuilder()).withConfig(k8sConfig).build();
-            this.clientW = (new KubernetesClientBuilder()).withConfig(k8sConfig).build();
             this.vertx = vertx;
             this.secure = isSecure(config);
             AnyNamespaceOperation<Endpoints, EndpointsList, Resource<Endpoints>> endpointsOperation;
             if (this.allNamespaces) {
-                endpointsOperation = (AnyNamespaceOperation)this.clientW.endpoints().inAnyNamespace();
+                endpointsOperation = (AnyNamespaceOperation)this.client.endpoints().inAnyNamespace();
             } else {
-                endpointsOperation = (AnyNamespaceOperation)this.clientW.endpoints().inNamespace(this.namespace);
+                endpointsOperation = (AnyNamespaceOperation)this.client.endpoints().inNamespace(this.namespace);
             }
 
             endpointsOperation.withField(METADATA_NAME, application).inform(new ResourceEventHandler<Endpoints>() {
