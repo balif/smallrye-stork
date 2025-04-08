@@ -173,7 +173,6 @@ public class KubernetesServiceDiscovery extends CachingServiceDiscovery {
                             LOGGER.error("Unable to retrieve the endpoint from the {} service", application,
                                     result.cause());
                             emitter.fail(result.cause());
-                            invalidated.set(true);
                         }
                     });
                 });
