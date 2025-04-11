@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
@@ -645,6 +646,63 @@ public class KubernetesServiceDiscoveryTest {
                 .until(instances::isEmpty);
 
         assertThat(instances).isEmpty();
+    }
+
+    @Test
+    void shouldFetchK8sApiOnlyOnceAfterCacheInvalidate() {
+        String serviceName = "svc";
+
+        //Given a few instances for a svc service
+        List<Endpoints> endpointsList = List
+                .of(registerKubernetesResources(serviceName, defaultNamespace, "10.96.96.231", "10.96.96.232",
+                        "10.96.96.233"));
+
+        //Recording k8s cluster calls and and build the response with the (previous registered) endpoints
+        AtomicInteger serverHit = new AtomicInteger(0);
+        server.expect().get().withPath("/api/v1/namespaces/test/endpoints?fieldSelector=metadata.name%3Dsvc")
+                .andReply(200, r -> {
+                    serverHit.incrementAndGet();
+                    return new EndpointsListBuilder().withItems(endpointsList).build();
+                }).always();
+
+        TestConfigProvider.addServiceConfig(serviceName, null, "kubernetes", null,
+                null, Map.of("k8s-host", k8sMasterUrl, "k8s-namespace", defaultNamespace, "refresh-period", "3"), null);
+        Stork stork = StorkTestUtils.getNewStorkInstance();
+
+        AtomicReference<List<ServiceInstance>> instances = new AtomicReference<>();
+
+        Service service = stork.getService(serviceName);
+        service.getServiceDiscovery().getServiceInstances()
+                .onFailure().invoke(th -> fail("Failed to get service instances from Kubernetes", th))
+                .subscribe().with(instances::set);
+
+        await().atMost(Duration.ofSeconds(5))
+                .until(() -> instances.get() != null);
+
+        assertThat(serverHit.get()).isEqualTo(1);
+        assertThat(instances.get()).hasSize(3);
+        assertThat(instances.get().stream().map(ServiceInstance::getPort)).allMatch(p -> p == 8080);
+        assertThat(instances.get().stream().map(ServiceInstance::getHost)).containsExactlyInAnyOrder("10.96.96.231",
+                "10.96.96.232", "10.96.96.233");
+
+        AtomicBoolean testInProgress = new AtomicBoolean(true);
+        //second try to get instances, instances should be fetched from cache, cluster calls should be still 1
+        new Thread(() -> {
+            while (testInProgress.get()) {
+                service.getServiceDiscovery().getServiceInstances()
+                        .onFailure().invoke(th -> fail("Failed to get service instances from Kubernetes", th))
+                        .subscribe().with(instances::set);
+            }
+        }).start();
+        assertThat(serverHit.get()).isEqualTo(1);
+
+        ((KubernetesServiceDiscovery)service.getServiceDiscovery()).invalidate();
+
+        await().atMost(Duration.ofSeconds(5))
+                .until(() -> instances.get() != null);
+        testInProgress.set(false);
+        assertThat(serverHit.get()).isEqualTo(2);
+
     }
 
     private Endpoints registerKubernetesResources(String serviceName, String namespace, String... ips) {
